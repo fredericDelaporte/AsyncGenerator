@@ -15,21 +15,13 @@ namespace AsyncGenerator.Tests.ExternalProjects.NHibernate
 	/// Transformation for the NHibernate project. 
 	/// Before running the test the following steps needs to be done:
 	///		- Fetch the NHibernate submodule
-	///		- Run the script to generate the SharedAssembly.cs
+	///		- Run "Source/ShowBuildMenu.bat" script with the option "A" to generate the SharedAssembly.cs
 	///		- Restore nuget packages for the NHibernate solution
 	///		- Run the test
 	/// </summary>
 	[TestFixture]
 	public class Fixture : BaseFixture
 	{
-		private readonly HashSet<string> _publicTypes = new HashSet<string>
-		{
-			"ISession",
-			"IQuery",
-			"IQueryOver",
-			"ICriteria"
-		};
-
 		[Explicit]
 		[Test]
 		public void TestAfterTransformation()
@@ -37,97 +29,20 @@ namespace AsyncGenerator.Tests.ExternalProjects.NHibernate
 			var slnFilePath = Path.GetFullPath(GetBaseDirectory() + @"..\..\ExternalProjects\NHibernate\Source\src\NHibernate.sln");
 			var config = AsyncCodeConfiguration.Create()
 				.ConfigureSolution(slnFilePath, s => s
-					.RunInParallel()
+					//.RunInParallel()
 					.ConfigureProject("NHibernate", p => p
 						.ConfigureAnalyzation(a => a
 							.MethodConversion(GetMethodConversion)
 							.CallForwarding(true)
 							.CancellationTokens(t => t
 								.Guards(true)
-								.MethodGeneration(symbolInfo =>
-								{
-									if (_publicTypes.Contains(symbolInfo.Symbol.ContainingType.Name) || // For public types generate default parameter
-										symbolInfo.ImplementedInterfaces.Any(o => _publicTypes.Contains(o.ContainingType.Name))) // The rule for public types shall be passed to implementors
-									{
-										return MethodCancellationToken.DefaultParameter;
-									}
-									return MethodCancellationToken.Parameter;
-								})
-								.RequiresCancellationToken(symbol =>
-								{
-									if (IsEventListener(symbol.ContainingType))
-									{
-										return true;
-									}
-									return null; // Leave the decision to the generator
-								})
 							)
 							.ScanMethodBody(true)
 						)
 						.ConfigureTransformation(t => t
-							.AsyncLock("NHibernate.Util.AsyncLock", "LockAsync")
-							.LocalFunctions(true)
-							.ConfigureAwaitArgument(SyntaxFactory.LiteralExpression(SyntaxKind.FalseLiteralExpression))
-						)
-						.RegisterPlugin<TransactionScopeRewriter>() // Rewrite TransactionScope in AdoNetWithDistributedTransactionFactory
-					)
-					.ConfigureProject("NHibernate.DomainModel", p => p
-						.ConfigureAnalyzation(a => a
-							.ScanForMissingAsyncMembers(true)
-							.ScanMethodBody(true)
+							.Disable()
 						)
 					)
-					.ConfigureProject("NHibernate.Test", p => p
-						.ConfigureAnalyzation(a => a
-							.MethodConversion(symbol =>
-								{
-									return symbol.GetAttributes().Any(o => o.AttributeClass.Name == "TestAttribute")
-										? MethodConversion.Smart
-										: MethodConversion.Unknown;
-								})
-							.PreserveReturnType(symbol => symbol.GetAttributes().Any(o => o.AttributeClass.Name == "TestAttribute"))
-							.ScanForMissingAsyncMembers(o => o.AllInterfaces.Any(i => i.ContainingAssembly.Name == "NHibernate"))
-							.CancellationTokens(t => t
-								.RequiresCancellationToken(symbol => symbol.GetAttributes().Any(o => o.AttributeClass.Name == "TestAttribute") ? (bool?)false : null))
-							.ScanMethodBody(true)
-							.DocumentSelection(doc =>
-							{
-								return
-									// AsQueryable method is called on a retrieved list from db and the result is used elsewhere in code
-									!doc.FilePath.EndsWith(@"Linq\MathTests.cs")
-									// It looks like that GC.Collect works differently with async.
-									// if "await Task.Yield();" is added after DoLinqInSeparateSessionAsync then the test runs successfully (TODO: discover why)
-									&& !doc.FilePath.EndsWith(@"Linq\ExpressionSessionLeakTest.cs")
-									;
-							})
-							.TypeConversion(type =>
-								{
-									if (type.Name == "NorthwindDbCreator" || // Ignored for performance reasons
-										type.Name == "ObjectAssert" ||  // Has a TestFixture attribute but is not a test
-										type.Name == "LinqReadonlyTestsContext") // SetUpFixture
-									{
-										return TypeConversion.Ignore;
-									}
-									if (type.GetAttributes().Any(o => o.AttributeClass.Name == "TestFixtureAttribute"))
-									{
-										return TypeConversion.NewType;
-									}
-									var currentType = type;
-									while (currentType != null)
-									{
-										if (currentType.Name == "TestCase")
-										{
-											return TypeConversion.Ignore;
-										}
-										currentType = currentType.BaseType;
-									}
-									return TypeConversion.Unknown;
-								})
-						)
-						.RegisterPlugin<TransactionScopeRewriter>()
-						.RegisterPlugin<LinqAsyncCounterpartsFinder>()
-					)
-					.ApplyChanges(true)
 				);
 			var generator = new AsyncCodeGenerator();
 			Assert.DoesNotThrowAsync(async () => await generator.GenerateAsync(config));
